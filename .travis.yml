@@ -25,26 +25,26 @@ jobs:
   include:
     - stage: Build
       script: 
-        - echo "$DOCKER_PASSWORD" | docker login -u "$DOCKER_USERNAME" --password-stdin
+        - echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin
         - make publish
     - stage: Update-Preprod-Image
       before_script:
         - ENV='preprod'
-        - wget $KSONNET_CLI_RELEASE
+        - wget "$KSONNET_CLI_RELEASE"
         - tar xvf $(basename ${KSONNET_CLI_RELEASE})
-        - PATH=$PATH:$PWD/$(basename $KSONNET_CLI_RELEASE .tar.gz)/
-        - echo $GIT_SSH_KEY | base64 --decode > ~/.ssh/id_rsa
+        - PATH=$PATH:$PWD/$(basename "$KSONNET_CLI_RELEASE" .tar.gz)/
+        - echo "${GIT_SSH_KEY}" | base64 --decode > ~/.ssh/id_rsa
         - chmod 400 ~/.ssh/id_rsa
       script:
-        - git clone https://github.com/$CONFIG_ORG/$CONFIG_REPO
-        - cd $CONFIG_REPO
-        - ./update-image.sh $ENV $ARGO_CD_APP_PREFIX $IMAGE_NAME $CONFIG_ORG $CONFIG_REPO $TRAVIS_COMMIT
-    - stage: Deploy-Default-Env
+        - git clone "https://github.com/$CONFIG_ORG/$CONFIG_REPO"
+        - cd ${CONFIG_REPO}
+        - ./update-image.sh $ENV "$ARGO_CD_APP_PREFIX" "$IMAGE_NAME" "$CONFIG_ORG" "$CONFIG_REPO" "$TRAVIS_COMMIT"
+    - stage: Deploy-Preprod-Env
       before_script:
         - ENV='preprod'
-        - wget $ARGO_CD_CLI_RELEASE -O argocd
+        - wget "${ARGO_CD_CLI_RELEASE}" -O argocd
         - chmod +x argocd
         - PATH=$PATH:$PWD/
       script:
-        - argocd --server $ARGO_CD_URL --auth-token $ARGO_CD_AUTH_TOKEN app sync $ARGO_CD_APP_PREFIX-$ENV
-        - argocd --server $ARGO_CD_URL --auth-token $ARGO_CD_AUTH_TOKEN app wait $ARGO_CD_APP_PREFIX-$ENV --timeout $ARGO_CD_SYNC_TIMEOUT
+        - argocd --server "$ARGO_CD_URL" --auth-token "${ARGO_CD_AUTH_TOKEN}" app sync "$ARGO_CD_APP_PREFIX-$ENV"
+        - argocd --server "$ARGO_CD_URL" --auth-token "${ARGO_CD_AUTH_TOKEN}" app wait "$ARGO_CD_APP_PREFIX-$ENV" --timeout "$ARGO_CD_SYNC_TIMEOUT"
