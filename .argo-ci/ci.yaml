@@ -1,0 +1,134 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Workflow
+metadata:
+  generateName: argo-cd-hello-world-ci
+spec:
+  entrypoint: argo-cd-hello-world-ci
+  arguments:
+    parameters:
+    - {name: argo-cd-server, value: argo-cd-demo.argoproj.io}
+    - {name: argo-cd-app-prefix, value: hello-world-ks}
+    - {name: image-name, value: argoprojdemo/argo-cd-hello-world-app}
+    - {name: app-revision, value: master}
+    - {name: app-org, value: argoproj}
+    - {name: app-repo, value: argo-cd-hello-world-app}
+    - {name: config-revision, value: master}
+    - {name: config-repo, value: "https://github.com/argoproj/argo-cd-hello-world-config.git"}
+    - {name: argo-cd-sync-timeout, value: 600}
+  volumes:
+  - name: docker-cred
+    secret:
+      secretName: docker-cred
+  - name: git-ssh-key
+    secret:
+      secretName: git-ssh-key
+      defaultMode: 256
+  templates:
+  - name: argo-cd-hello-world-ci
+    steps:
+    - - name: build
+        template: ci-dind
+    - - name: update-preprod-image
+        template: ksonnet
+        arguments:
+          parameters:
+          - name: env
+            value: preprod
+          - name: git-sha
+            value: "{{steps.build.outputs.parameters.git-sha}}"
+    - - name: deploy-preprod-env
+        template: argo-cd-deploy
+        arguments:
+          parameters:
+          - name: env
+            value: preprod
+
+  - name: argo-cd-deploy
+    inputs:
+      parameters:
+        - name: env
+    container:
+      image: argoproj/argocd-cli:v0.7.1
+      command: [sh, -c]
+      args: ["./argocd app sync $ARGO_CD_APP_PREFIX-$ENV && ./argocd app wait $ARGO_CD_APP_PREFIX-$ENV --timeout $ARGO_CD_SYNC_TIMEOUT"]
+      env:
+      - name: ENV
+        value: "{{inputs.parameters.env}}"
+      - name: ARGO_CD_APP_PREFIX
+        value: "{{workflow.parameters.argo-cd-app-prefix}}"
+      - name: ARGOCD_SERVER
+        value: "{{workflow.parameters.argo-cd-server}}"
+      - name: ARGOCD_AUTH_TOKEN
+        valueFrom:
+          secretKeyRef:
+            name: argo-cd-token
+            key: auth-token
+      - name: ARGO_CD_SYNC_TIMEOUT
+        value: "{{workflow.parameters.argo-cd-sync-timeout}}"
+  - name: ksonnet
+    inputs:
+      parameters:
+      - name: env
+      - name: git-sha
+      artifacts:
+      - name: code
+        path: "/config"
+        git:
+          repo: "{{workflow.parameters.config-repo}}"
+          revision: "{{workflow.parameters.config-revision}}"
+    container:
+      image: argoproj/argo-cd-tools:latest
+      command: [sh, -c]
+      args:
+        - |
+          git remote set-url origin git@github.com:$(git remote -v | awk 'NR==1 {print $2}' | cut -d '/' -f 4-5)
+          ./update-image.sh $ENV $ARGO_CD_APP_PREFIX $IMAGE_NAME $GIT_SHA
+      workingDir: "/config"
+      volumeMounts:
+      - name: git-ssh-key
+        mountPath: "/root/.ssh"
+      env:
+      - name: GIT_SHA
+        value: "{{inputs.parameters.git-sha}}"
+      - name: ENV
+        value: "{{inputs.parameters.env}}"
+      - name: ARGO_CD_APP_PREFIX
+        value: "{{workflow.parameters.argo-cd-app-prefix}}"
+      - name: IMAGE_NAME
+        value: "{{workflow.parameters.image-name}}"
+  - name: ci-dind
+    inputs:
+      parameters:
+      - name: build-cmd
+        default: make docker-build publish && git rev-parse HEAD | tee /tmp/git_sha.txt
+      - name: download-docker
+        default: curl -O https://get.docker.com/builds/Linux/x86_64/docker-1.13.1.tgz && tar -xzf docker-1.13.1.tgz && mv docker/docker /usr/local/bin/docker && chmod 755 /usr/local/bin/docker
+      artifacts:
+      - name: code
+        path: "/go/src/github.com/{{workflow.parameters.app-org}}/{{workflow.parameters.app-repo}}"
+        git:
+          repo: "https://github.com/{{workflow.parameters.app-org}}/{{workflow.parameters.app-repo}}.git"
+          revision: "{{workflow.parameters.app-revision}}"
+    container:
+      image: golang:1.10.3
+      command: [sh, -c]
+      args: ["{{inputs.parameters.download-docker}}; until docker ps; do sleep 3; done && {{inputs.parameters.build-cmd}}"]
+      workingDir: "/go/src/github.com/{{workflow.parameters.app-org}}/{{workflow.parameters.app-repo}}"
+      volumeMounts:
+      - name: docker-cred
+        mountPath: "/root/.docker"
+        readOnly: true
+      env:
+      - name: DOCKER_HOST
+        value: 127.0.0.1
+    outputs:
+      parameters:
+      - name: git-sha
+        valueFrom:
+          path: /tmp/git_sha.txt
+    sidecars:
+    - name: dind
+      image: docker:17.10-dind
+      securityContext:
+        privileged: true
+      mirrorVolumeMounts: true

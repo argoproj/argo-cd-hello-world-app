@@ -1,0 +1,49 @@
+language: go
+
+sudo: required
+
+services:
+  - docker
+
+go:
+  - "1.10"
+
+git:
+  depth: 1
+
+env:
+  global:
+    - ARGOCD_SERVER='argo-cd-demo.argoproj.io'
+    - ARGO_CD_APP_PREFIX='hello-world-ks'
+    - IMAGE_NAME='argoprojdemo/argo-cd-hello-world-app'
+    - CONFIG_REPO='git@github.com:argoproj/argo-cd-hello-world-config.git'
+    - ARGO_CD_SYNC_TIMEOUT=600
+    - ARGO_CD_CLI_RELEASE='https://github.com/argoproj/argo-cd/releases/download/v0.7.1/argocd-linux-amd64'
+    - KSONNET_CLI_RELEASE='https://github.com/ksonnet/ksonnet/releases/download/v0.12.0/ks_0.12.0_linux_amd64.tar.gz'
+jobs:
+  include:
+    - stage: Build
+      script: 
+        - echo "${DOCKER_PASSWORD}" | docker login -u "${DOCKER_USERNAME}" --password-stdin
+        - make publish
+    - stage: Update-Preprod-Image
+      before_script:
+        - ENV='preprod'
+        - wget "$KSONNET_CLI_RELEASE"
+        - tar xvf $(basename ${KSONNET_CLI_RELEASE})
+        - PATH=$PATH:$PWD/$(basename "$KSONNET_CLI_RELEASE" .tar.gz)/
+        - echo "${GIT_SSH_KEY}" | base64 --decode > ~/.ssh/id_rsa
+        - chmod 400 ~/.ssh/id_rsa
+      script:
+        - git clone "$CONFIG_REPO"
+        - cd $(basename "$CONFIG_REPO" .git)
+        - ./update-image.sh $ENV "$ARGO_CD_APP_PREFIX" "$IMAGE_NAME" "$TRAVIS_COMMIT"
+    - stage: Deploy-Preprod-Env
+      before_script:
+        - ENV='preprod'
+        - wget "${ARGO_CD_CLI_RELEASE}" -O argocd
+        - chmod +x argocd
+        - PATH=$PATH:$PWD/
+      script:
+        - argocd app sync "$ARGO_CD_APP_PREFIX-$ENV"
+        - argocd app wait "$ARGO_CD_APP_PREFIX-$ENV" --timeout "$ARGO_CD_SYNC_TIMEOUT"
